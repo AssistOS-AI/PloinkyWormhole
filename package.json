@@ -1,0 +1,16 @@
+{
+  "name": "ploinky-wormhole-server",
+  "version": "0.1.0",
+  "description": "Public rendezvous and signaling server for did:wormhole",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test",
+    "docs:matrix": "node scripts/generate_specs_matrix.mjs",
+    "docs:verify": "node scripts/verify_docs_links.mjs",
+    "docs:verify-static": "node scripts/verify_static_site.js docs --path / --path /architecture.html --path /api.html --path /security.html --path /specsLoader.html"
+  }
+}

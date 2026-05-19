@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ploinky Wormhole Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <script type="module" src="/partials-loader.js"></script>
+</head>
+<body>
+  <div data-include="/partials/header.html"></div>
+  <main>
+    <p class="breadcrumbs"><a href="/index.html">Home</a> / API</p>
+    <h1>API Surface</h1>
+    <p>The API mirrors three server concepts: DID state, communication intent, and signaling.</p>
+
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th><th>Signature required</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>GET</td><td>/did-state?did=...</td><td>Read public DID state</td><td>No</td></tr>
+        <tr><td>PUT</td><td>/did-state</td><td>Create or update DID state</td><td>Yes after bootstrap</td></tr>
+        <tr><td>POST</td><td>/intent</td><td>Submit intent or receive forwarded intent</td><td>No</td></tr>
+        <tr><td>GET</td><td>/intents?to_did=...</td><td>Read active intents for DID</td><td>Yes (to_did)</td></tr>
+        <tr><td>POST</td><td>/intent/{intent_id}/seen</td><td>Mark intent as seen</td><td>Yes (to_did)</td></tr>
+        <tr><td>POST</td><td>/intent-response</td><td>Submit response to intent</td><td>Yes (from_did responder)</td></tr>
+        <tr><td>GET</td><td>/intent-responses?to_did=...</td><td>Read responses addressed to DID</td><td>Yes (to_did)</td></tr>
+        <tr><td>POST</td><td>/signal</td><td>Submit signaling message</td><td>Yes (from_did)</td></tr>
+        <tr><td>GET</td><td>/signals?to_did=...&intent_id=...</td><td>Read signaling messages</td><td>Yes (to_did)</td></tr>
+        <tr><td>GET</td><td>/health</td><td>Liveness status</td><td>No</td></tr>
+        <tr><td>GET</td><td>/limits</td><td>Published server limits</td><td>No</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Forwarding semantics</h2>
+    <p>
+      The same endpoints process local and forwarded objects. If <code>to_did</code> belongs to another server domain,
+      the object is forwarded over HTTPS according to server configuration.
+      Relay metadata headers prevent loops and duplicate delivery. For signed transport objects
+      (<code>/intent-response</code> and <code>/signal</code>), forwarding preserves the original DID signature
+      headers and signed body so the destination server can re-verify canonical signatures.
+    </p>
+
+    <h2>Specs contract</h2>
+    <p>
+      Full normative constraints live in <a href="/specsLoader.html?spec=DS003-api-contract.md">DS003-api-contract.md</a> and
+      <a href="/specsLoader.html?spec=DS004-security-and-abuse-controls.md">DS004-security-and-abuse-controls.md</a>.
+    </p>
+  </main>
+  <div data-include="/partials/footer.html"></div>
+</body>
+</html>

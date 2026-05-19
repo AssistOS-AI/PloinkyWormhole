@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ploinky Wormhole Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <script type="module" src="/partials-loader.js"></script>
+</head>
+<body>
+  <div data-include="/partials/header.html"></div>
+  <main>
+    <p class="breadcrumbs"><a href="/index.html">Home</a> / Security</p>
+    <h1>Security and Anti-Abuse Controls</h1>
+    <p>
+      The server enforces operational protections without semantic trust classification.
+      It does not decide if a sender is trusted, known, or blocked at application semantics level.
+      It only applies transport-level controls.
+    </p>
+
+    <pre class="mermaid">stateDiagram-v2
+      [*] --> available
+      available --> seen
+      seen --> accepted
+      seen --> rejected
+      seen --> later
+      available --> expired
+    </pre>
+
+    <h2>Operational controls</h2>
+    <p>
+      Controls include rate limits by IP and DID dimensions, payload size limits, per-intent signaling queue limits,
+      short TTL windows for temporary objects, replay cache for signed requests, and relay cache for forwarded object deduplication.
+    </p>
+    <p>
+      Signatures use the current DID public key and canonical request payloads. DID-protected reads are mandatory for intents,
+      responses, and signaling retrieval so metadata remains private to DID controllers.
+    </p>
+
+    <h2>Constraints and scope</h2>
+    <p>
+      The server is intentionally neutral: it does not host mailboxes, chat streams, file transfer, task payloads, or workspace policy engines.
+      Final content is exchanged peer-to-peer after agent-level acceptance and channel establishment.
+    </p>
+  </main>
+  <div data-include="/partials/footer.html"></div>
+</body>
+</html>

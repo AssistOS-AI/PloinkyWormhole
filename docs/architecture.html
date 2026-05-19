@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ploinky Wormhole Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <script type="module" src="/partials-loader.js"></script>
+</head>
+<body>
+  <div data-include="/partials/header.html"></div>
+  <main>
+    <p class="breadcrumbs"><a href="/index.html">Home</a> / Architecture</p>
+    <h1>Architecture</h1>
+    <p>
+      The server is a single-process HTTP runtime with explicit boundaries between durable DID state and temporary transport queues.
+      Durable state is limited to DID documents and key history. Temporary state contains intents, responses, signaling messages, and replay/relay caches.
+    </p>
+
+    <pre class="mermaid">flowchart LR
+      A[Agent Sender] -->|POST /intent| B[Server Domain A]
+      B -->|HTTPS forward| C[Server Domain B]
+      C -->|GET /intents signed by to_did| D[Agent Recipient]
+      D -->|POST /intent-response signed| C
+      C -->|HTTPS forward| B
+      D -->|POST /signal signed| C
+      C -->|GET /signals signed| D
+    </pre>
+
+    <h2>Core modules</h2>
+    <p>
+      <code>src/server.mjs</code> starts the HTTP listener and wires lifecycle. <code>src/app.mjs</code> handles routing, validation, signatures, forwarding,
+      and queue management. <code>src/storage.mjs</code> persists DID states through atomic JSON writes. <code>src/signatures.mjs</code> defines canonical
+      signature payloads and verification. <code>src/rate-limit.mjs</code> enforces fixed-window throttling with backoff.
+    </p>
+
+    <h2>Canonical signing model</h2>
+    <p>
+      DID-protected operations require <code>x-did</code>, <code>x-signature</code>, <code>x-timestamp</code>, and optional <code>x-nonce</code>.
+      The server verifies signatures against the current DID public key over:
+    </p>
+    <pre><code>METHOD + "\n" + PATH_WITH_QUERY + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + SHA256(BODY_RAW)</code></pre>
+    <p>
+      Requests outside allowed clock skew are rejected. Replayed signatures are blocked within a replay window.
+    </p>
+  </main>
+  <div data-include="/partials/footer.html"></div>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ploinky Wormhole Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <script type="module" src="/partials-loader.js"></script>
+</head>
+<body>
+  <div data-include="/partials/header.html"></div>
+  <main>
+    <p class="breadcrumbs"><a href="/index.html">Home</a></p>
+    <h1>Ploinky Wormhole Documentation</h1>
+    <p>
+      This project provides the public rendezvous and signaling server for <code>did:wormhole</code>. The server stores minimal public DID state,
+      transports temporary communication intents and intent responses, and relays temporary signaling data used to establish WebRTC or compatible P2P channels.
+    </p>
+    <p>
+      Trust semantics, policy enforcement, contact classification, and final content transfer remain outside the server and are handled by Wormhole agents.
+      The server implements operational safeguards only: TTL expiration, payload limits, rate limits, and optional blocklists.
+    </p>
+
+    <h2>Repository structure</h2>
+    <pre class="mermaid">flowchart TB
+      A[src/] --> B[app.mjs request handler]
+      A --> C[server.mjs bootstrap]
+      A --> D[storage.mjs persistent DID states]
+      E[test/] --> F[node:test integration tests]
+      G[docs/] --> H[HTML pages + specs]
+      I[scripts/] --> J[matrix + docs verifiers]
+    </pre>
+
+    <h2>Documentation and specifications</h2>
+    <p>
+      The DS specification set is authoritative. Read the matrix through
+      <a href="/specsLoader.html?spec=matrix.md">specsLoader matrix entry</a>,
+      then follow the relevant DS files for implementation constraints.
+    </p>
+    <p>
+      Coding style, module boundaries, and test organization are defined in
+      <a href="/specsLoader.html?spec=DS001-coding-style.md">DS001-coding-style.md</a>.
+    </p>
+
+    <h2>Runtime defaults</h2>
+    <p>
+      Runtime is Node.js ESM with no external dependencies. DID state persists in a local JSON file,
+      while intents, responses, signaling queues, replay cache, and relay cache are in-memory temporary state with TTL cleanup.
+    </p>
+
+    <h2>Testing organization</h2>
+    <p>
+      Tests use built-in <code>node:test</code> and execute request-level behavior against an ephemeral server instance.
+      Coverage focuses on DID state publishing, DID-protected reads, signaling transport behavior, and anti-abuse constraints.
+    </p>
+
+    <h2>Current local skill catalog</h2>
+    <p>
+      The repository also carries local agent skills under <code>.agents/skills/</code>:
+      <code>achilles_specs</code>, <code>antropic_skill_build</code>, <code>article_build</code>, <code>cskill_build</code>,
+      <code>dgskill_build</code>, <code>gamp_specs</code>, <code>oskill_build</code>, and <code>review_specs</code>.
+      This host documentation remains focused on the Wormhole server runtime.
+    </p>
+  </main>
+  <div data-include="/partials/footer.html"></div>
+</body>
+</html>
