@@ -43,7 +43,16 @@
       the object is forwarded over HTTPS according to server configuration.
       Relay metadata headers prevent loops and duplicate delivery. For signed transport objects
       (<code>/intent-response</code> and <code>/signal</code>), forwarding preserves the original DID signature
-      headers and signed body so the destination server can re-verify canonical signatures.
+      headers and signed body so the destination server can re-verify canonical signatures, including
+      remote DID-state resolution when sender DID state is not local.
+    </p>
+    <p>
+      Production cross-server forwarding is HTTPS-only. Insecure protocol use is blocked unless explicitly enabled for loopback-scoped local testing.
+    </p>
+    <p>
+      DID-protected endpoints require an <code>active</code> DID state for authentication. DIDs marked
+      <code>disabled</code> or <code>revoked</code> remain publicly visible through <code>/did-state</code> but cannot
+      authorize protected metadata operations.
     </p>
 
     <h2>Specs contract</h2>

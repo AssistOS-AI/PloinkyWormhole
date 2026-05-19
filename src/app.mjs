@@ -64,11 +64,30 @@ function requiresProtectedRead(pathname, method) {
   );
 }
 
+function isLoopbackDomain(domain) {
+  const lower = String(domain).toLowerCase();
+  const host = lower.startsWith('[') ? lower.slice(1, lower.indexOf(']')) : lower.split(':')[0];
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function buildRemoteBaseUrl(config, targetDomain) {
+  const protocol = config.forwardProtocol;
+  if (protocol !== 'https') {
+    if (!config.allowInsecureForwarding || !isLoopbackDomain(targetDomain)) {
+      throw createHttpError(500, 'Insecure forwarding protocol is not allowed.');
+    }
+  }
+  return `${protocol}://${targetDomain}`;
+}
+
 async function forwardObject(config, targetDomain, path, body, incomingRelayId, incomingHop, headers = {}) {
   const relayId = incomingRelayId || randomUUID();
   const nextHop = incomingHop + 1;
+  if (!Number.isInteger(nextHop) || nextHop < 0) {
+    throw createHttpError(400, 'Invalid relay hop header.');
+  }
   const raw = typeof body === 'string' ? body : JSON.stringify(body);
-  const response = await fetch(`${config.forwardProtocol}://${targetDomain}${path}`, {
+  const response = await fetch(`${buildRemoteBaseUrl(config, targetDomain)}${path}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -172,7 +191,39 @@ export async function createApp(config) {
     throw createHttpError(429, `Rate limit exceeded for ${label}.`);
   }
 
-  function verifyDidSignedRequest(request, rawBody, targetDid) {
+  async function loadDidStateForVerification(did) {
+    const local = didStore.get(did);
+    if (local) {
+      return local;
+    }
+    const didData = assertDid(did, 'did');
+    if (didData.domain === config.serverDomain) {
+      throw createHttpError(404, 'DID state not found.');
+    }
+    let response;
+    try {
+      response = await fetch(
+        `${buildRemoteBaseUrl(config, didData.domain)}/did-state?did=${encodeURIComponent(did)}`
+      );
+    } catch {
+      throw createHttpError(401, 'Could not resolve DID state for signature verification.');
+    }
+    if (!response.ok) {
+      throw createHttpError(401, 'Could not resolve DID state for signature verification.');
+    }
+    let remoteState;
+    try {
+      remoteState = await response.json();
+    } catch {
+      throw createHttpError(401, 'Could not resolve DID state for signature verification.');
+    }
+    if (!remoteState?.current_public_key || typeof remoteState.current_public_key !== 'string') {
+      throw createHttpError(401, 'Resolved DID state is invalid.');
+    }
+    return remoteState;
+  }
+
+  async function verifyDidSignedRequest(request, rawBody, targetDid) {
     const did = request.headers['x-did'];
     const signature = request.headers['x-signature'];
     const timestamp = request.headers['x-timestamp'];
@@ -186,7 +237,7 @@ export async function createApp(config) {
     }
 
     ensureTimestampWithinSkew(timestamp, config.signatureSkewMs);
-    const state = requireDidState(didStore, did);
+    const state = await loadDidStateForVerification(did);
     if (state.status !== 'active') {
       throw createHttpError(403, 'DID is not active.');
     }
@@ -209,16 +260,6 @@ export async function createApp(config) {
 
     replayCache.set(replayKey, Date.now() + config.replayWindowMs);
     return state;
-  }
-
-  function requireForwardedSignatureHeaders(request) {
-    const hasDid = typeof request.headers['x-did'] === 'string' && request.headers['x-did'].length > 0;
-    const hasSignature = typeof request.headers['x-signature'] === 'string' && request.headers['x-signature'].length > 0;
-    const hasTimestamp = typeof request.headers['x-timestamp'] === 'string' && request.headers['x-timestamp'].length > 0;
-    if (!hasDid || !hasSignature || !hasTimestamp) {
-      throw createHttpError(401, 'Missing DID signature headers.');
-    }
-    ensureTimestampWithinSkew(request.headers['x-timestamp'], config.signatureSkewMs);
   }
 
   function cleanup() {
@@ -287,8 +328,13 @@ export async function createApp(config) {
       consumeRate(ipLimiter, response, ip, 'ip');
 
       const relayId = request.headers['x-wormhole-relay-id'] || '';
-      const hop = Number(request.headers['x-wormhole-hop'] || 0);
-      if (Number.isFinite(hop) && hop > config.maxRelayHops) {
+      const hopHeader = request.headers['x-wormhole-hop'];
+      const hasHopHeader = hopHeader !== undefined && hopHeader !== null && String(hopHeader).length > 0;
+      const hop = hasHopHeader ? Number(hopHeader) : 0;
+      if (hasHopHeader && (!Number.isInteger(hop) || hop < 0)) {
+        throw createHttpError(400, 'Invalid relay hop header.');
+      }
+      if (hop > config.maxRelayHops) {
         throw createHttpError(508, 'Relay hop limit exceeded.');
       }
       if (relayId) {
@@ -367,7 +413,7 @@ export async function createApp(config) {
           config.adminToken && request.headers['x-admin-token'] && request.headers['x-admin-token'] === config.adminToken;
 
         if (!isAdminRecovery) {
-          verifyDidSignedRequest(request, rawBody, did.did);
+          await verifyDidSignedRequest(request, rawBody, did.did);
         }
 
         const fingerprint = computeFingerprint(body.current_public_key);
@@ -454,7 +500,7 @@ export async function createApp(config) {
 
       if (request.method === 'GET' && url.pathname === '/intents') {
         const toDid = assertDid(url.searchParams.get('to_did'), 'to_did').did;
-        verifyDidSignedRequest(request, rawBody, toDid);
+        await verifyDidSignedRequest(request, rawBody, toDid);
         const entries = [...(intents.get(toDid)?.values() ?? [])];
         json(response, 200, { to_did: toDid, intents: entries });
         return;
@@ -463,7 +509,7 @@ export async function createApp(config) {
       if (request.method === 'POST' && /^\/intent\/[^/]+\/seen$/.test(url.pathname)) {
         const intentId = decodeURIComponent(url.pathname.split('/')[2]);
         const toDid = assertDid(body.to_did, 'to_did').did;
-        verifyDidSignedRequest(request, rawBody, toDid);
+        await verifyDidSignedRequest(request, rawBody, toDid);
 
         const bucket = intents.get(toDid);
         const intent = bucket?.get(intentId);
@@ -484,19 +530,11 @@ export async function createApp(config) {
           throw createHttpError(400, 'Invalid response value.');
         }
         const fromDid = assertDid(body.from_did, 'from_did').did;
-        const fromDidData = assertDid(fromDid, 'from_did');
         const toDidData = assertDid(body.to_did, 'to_did');
         ensureNotBlocked(config, ip, fromDid, toDidData.did);
         consumeRate(fromDidLimiter, response, fromDid, 'from_did');
         consumeRate(toDidLimiter, response, toDidData.did, 'to_did');
-        if (fromDidData.domain === config.serverDomain) {
-          verifyDidSignedRequest(request, rawBody, fromDid);
-        } else {
-          if (!relayId) {
-            throw createHttpError(401, 'Cross-domain intent responses must be forwarded.');
-          }
-          requireForwardedSignatureHeaders(request);
-        }
+        await verifyDidSignedRequest(request, rawBody, fromDid);
         ensureSizeLimit(body.agent_envelope, config.maxIntentEnvelopeBytes, 'agent_envelope');
 
         const expiresAt = toEpoch(body.expires_at, config.responseTtlMs);
@@ -550,7 +588,7 @@ export async function createApp(config) {
 
       if (request.method === 'GET' && url.pathname === '/intent-responses') {
         const toDid = assertDid(url.searchParams.get('to_did'), 'to_did').did;
-        verifyDidSignedRequest(request, rawBody, toDid);
+        await verifyDidSignedRequest(request, rawBody, toDid);
         const entries = [...(intentResponses.get(toDid)?.values() ?? [])];
         json(response, 200, { to_did: toDid, responses: entries });
         return;
@@ -558,18 +596,10 @@ export async function createApp(config) {
 
       if (request.method === 'POST' && url.pathname === '/signal') {
         const fromDid = assertDid(body.from_did, 'from_did').did;
-        const fromDidData = assertDid(fromDid, 'from_did');
         const toDidData = assertDid(body.to_did, 'to_did');
         const toDid = toDidData.did;
         ensureNotBlocked(config, ip, fromDid, toDid);
-        if (fromDidData.domain === config.serverDomain) {
-          verifyDidSignedRequest(request, rawBody, fromDid);
-        } else {
-          if (!relayId) {
-            throw createHttpError(401, 'Cross-domain signals must be forwarded.');
-          }
-          requireForwardedSignatureHeaders(request);
-        }
+        await verifyDidSignedRequest(request, rawBody, fromDid);
         ensureSizeLimit(body.payload, config.maxSignalPayloadBytes, 'payload');
         if (!body.intent_id) {
           throw createHttpError(400, 'intent_id is required.');
@@ -620,7 +650,7 @@ export async function createApp(config) {
         if (!intentId) {
           throw createHttpError(400, 'intent_id is required.');
         }
-        verifyDidSignedRequest(request, rawBody, toDid);
+        await verifyDidSignedRequest(request, rawBody, toDid);
         const queue = signals.get(toDid)?.get(intentId) ?? [];
         json(response, 200, { to_did: toDid, intent_id: intentId, signals: queue });
         return;

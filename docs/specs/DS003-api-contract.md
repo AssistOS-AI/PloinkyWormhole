@@ -26,7 +26,9 @@ Headers must include `x-did`, `x-signature`, and `x-timestamp`; `x-nonce` is opt
 
 `PUT /did-state` must require bootstrap proof for first publication and signed proof by current DID key for updates, except explicit administrative recovery mode.
 
-When `/intent-response` or `/signal` are forwarded cross-server, the forwarding server must preserve the original DID signature headers and exact signed request body. Destination servers may accept forwarded objects without local sender-key verification, while receiving agents remain responsible for cryptographic validation.
+When `/intent-response` or `/signal` are forwarded cross-server, the forwarding server must preserve the original DID signature headers and exact signed request body. Destination servers must verify these signatures using resolvable DID state, including public DID-state lookups from the sender DID domain when the sender DID is not local.
+
+DID-protected operations must require the authenticated DID state status to be `active`. `disabled` and `revoked` DIDs may remain visible via public DID state but must not authenticate protected reads or writes.
 
 ## Decisions & Questions
 

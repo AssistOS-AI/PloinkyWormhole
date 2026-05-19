@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { startServer } from '../src/server.mjs';
 
@@ -25,6 +26,10 @@ function signedHeaders({ did, privateKey, method, pathWithQuery, bodyRaw = '', t
 
 async function readJson(response) {
   return response.json();
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function findFreePort() {
@@ -54,6 +59,7 @@ async function startFixture(t, overrides = {}) {
     port: selectedPort,
     serverDomain: selectedDomain,
     forwardProtocol: 'http',
+    allowInsecureForwarding: true,
     bootstrapToken: 'boot',
     didStateFile,
     intentTtlMs: 5_000,
@@ -427,6 +433,59 @@ test('rejects forged relay headers without DID signature headers', async (t) => 
   assert.equal(signalAttempt.status, 401);
 });
 
+test('rejects forged relay headers with invalid signature values', async (t) => {
+  const portA = await findFreePort();
+  const portB = await findFreePort();
+  const domainA = `127.0.0.1:${portA}`;
+  const domainB = `127.0.0.1:${portB}`;
+  const a = await startFixture(t, { port: portA, serverDomain: domainA });
+  const b = await startFixture(t, { port: portB, serverDomain: domainB });
+
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = `did:wormhole:${domainA}:alice`;
+  const bobDid = `did:wormhole:${domainB}:bob`;
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(a.baseUrl, aliceDid, alicePub);
+  await publishDid(b.baseUrl, bobDid, bobPub);
+
+  const badTimestamp = new Date().toISOString();
+  const badHeaders = {
+    'x-wormhole-relay-id': 'fake-relay-3',
+    'x-wormhole-hop': '1',
+    'x-did': bobDid,
+    'x-signature': 'not-valid-base64-signature',
+    'x-timestamp': badTimestamp,
+    'x-nonce': 'x'
+  };
+
+  const badResponse = await fetch(`${a.baseUrl}/intent-response`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...badHeaders },
+    body: JSON.stringify({
+      intent_id: 'x',
+      from_did: bobDid,
+      to_did: aliceDid,
+      response: 'accept'
+    })
+  });
+  assert.equal(badResponse.status, 401);
+
+  const badSignal = await fetch(`${a.baseUrl}/signal`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...badHeaders, 'x-wormhole-relay-id': 'fake-relay-4' },
+    body: JSON.stringify({
+      intent_id: 'x',
+      from_did: bobDid,
+      to_did: aliceDid,
+      signal_type: 'offer',
+      payload: { sdp: 'v=0' }
+    })
+  });
+  assert.equal(badSignal.status, 401);
+});
+
 test('revoked DID cannot authenticate protected reads', async (t) => {
   const { baseUrl } = await startFixture(t);
   const bob = generateKeyPairSync('ed25519');
@@ -484,4 +543,335 @@ test('rejects DID state publish when did fingerprint suffix mismatches key', asy
     })
   });
   assert.equal(response.status, 400);
+});
+
+test('rejects insecure cross-domain forwarding when HTTPS policy is enforced', async (t) => {
+  const { baseUrl } = await startFixture(t, {
+    serverDomain: 'test.local',
+    forwardProtocol: 'http',
+    allowInsecureForwarding: false
+  });
+  const alice = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, aliceDid, alicePub);
+
+  const response = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      intent_id: 'https-policy-intent',
+      from_did: aliceDid,
+      to_did: 'did:wormhole:remote.example:bob'
+    })
+  });
+  assert.equal(response.status, 500);
+});
+
+test('health and limits endpoints expose operational metadata', async (t) => {
+  const { baseUrl } = await startFixture(t, {
+    ratePerIp: 99,
+    maxSignalsPerIntent: 7
+  });
+  const health = await fetch(`${baseUrl}/health`);
+  assert.equal(health.status, 200);
+  const healthPayload = await readJson(health);
+  assert.equal(healthPayload.status, 'ok');
+
+  const limits = await fetch(`${baseUrl}/limits`);
+  assert.equal(limits.status, 200);
+  const limitsPayload = await readJson(limits);
+  assert.equal(limitsPayload.rate_limits.per_ip, 99);
+  assert.equal(limitsPayload.max_signals_per_intent, 7);
+});
+
+test('enforces blocklist and payload size limits', async (t) => {
+  const blockedDid = 'did:wormhole:test.local:blocked';
+  const { baseUrl } = await startFixture(t, {
+    blocklistDids: new Set([blockedDid]),
+    maxIntentEnvelopeBytes: 20,
+    maxSignalPayloadBytes: 20
+  });
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, aliceDid, alicePub);
+  await publishDid(baseUrl, bobDid, bobPub);
+  await publishDid(baseUrl, blockedDid, bobPub);
+
+  const blockedIntent = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from_did: blockedDid,
+      to_did: aliceDid
+    })
+  });
+  assert.equal(blockedIntent.status, 403);
+
+  const largeIntent = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from_did: aliceDid,
+      to_did: bobDid,
+      agent_envelope: 'x'.repeat(200)
+    })
+  });
+  assert.equal(largeIntent.status, 413);
+
+  const signalPath = '/signal';
+  const signalBody = JSON.stringify({
+    intent_id: 'intent-size',
+    from_did: aliceDid,
+    to_did: bobDid,
+    signal_type: 'offer',
+    payload: { raw: 'x'.repeat(200) }
+  });
+  const signalHeaders = signedHeaders({
+    did: aliceDid,
+    privateKey: alice.privateKey,
+    method: 'POST',
+    pathWithQuery: signalPath,
+    bodyRaw: signalBody
+  });
+  const largeSignal = await fetch(`${baseUrl}${signalPath}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...signalHeaders },
+    body: signalBody
+  });
+  assert.equal(largeSignal.status, 413);
+});
+
+test('enforces rate limits and signaling queue cap', async (t) => {
+  const { baseUrl } = await startFixture(t, {
+    ratePerFromDid: 1,
+    ratePerToDid: 1,
+    rateWindowMs: 60_000,
+    maxSignalsPerIntent: 1
+  });
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, aliceDid, alicePub);
+  await publishDid(baseUrl, bobDid, bobPub);
+
+  const firstIntent = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ intent_id: 'r1', from_did: aliceDid, to_did: bobDid })
+  });
+  assert.equal(firstIntent.status, 202);
+
+  const secondIntent = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ intent_id: 'r2', from_did: aliceDid, to_did: bobDid })
+  });
+  assert.equal(secondIntent.status, 429);
+
+  const relaxed = await startFixture(t, {
+    ratePerFromDid: 100,
+    ratePerToDid: 100,
+    maxSignalsPerIntent: 1
+  });
+  const alice2 = generateKeyPairSync('ed25519');
+  const bob2 = generateKeyPairSync('ed25519');
+  const aliceDid2 = 'did:wormhole:test.local:alice2';
+  const bobDid2 = 'did:wormhole:test.local:bob2';
+  const alicePub2 = alice2.publicKey.export({ type: 'spki', format: 'pem' });
+  const bobPub2 = bob2.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(relaxed.baseUrl, aliceDid2, alicePub2);
+  await publishDid(relaxed.baseUrl, bobDid2, bobPub2);
+
+  const sendSignal = async (intentId) => {
+    const body = JSON.stringify({
+      intent_id: intentId,
+      from_did: aliceDid2,
+      to_did: bobDid2,
+      signal_type: 'offer',
+      payload: { sdp: 'v=0' }
+    });
+    const headers = signedHeaders({
+      did: aliceDid2,
+      privateKey: alice2.privateKey,
+      method: 'POST',
+      pathWithQuery: '/signal',
+      bodyRaw: body
+    });
+    return fetch(`${relaxed.baseUrl}/signal`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body
+    });
+  };
+
+  const s1 = await sendSignal('queue-cap');
+  assert.equal(s1.status, 202);
+  const s2 = await sendSignal('queue-cap');
+  assert.equal(s2.status, 429);
+});
+
+test('enforces relay hop limit and deduplicates relay ids', async (t) => {
+  const { baseUrl } = await startFixture(t, { maxRelayHops: 1 });
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, aliceDid, alicePub);
+  await publishDid(baseUrl, bobDid, bobPub);
+
+  const overHop = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-wormhole-relay-id': 'relay-hop-over',
+      'x-wormhole-hop': '3'
+    },
+    body: JSON.stringify({ intent_id: 'hop1', from_did: aliceDid, to_did: bobDid })
+  });
+  assert.equal(overHop.status, 508);
+
+  const malformedHop = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-wormhole-relay-id': 'relay-hop-bad',
+      'x-wormhole-hop': 'abc'
+    },
+    body: JSON.stringify({ intent_id: 'hop2', from_did: aliceDid, to_did: bobDid })
+  });
+  assert.equal(malformedHop.status, 400);
+
+  const relayHeaders = {
+    'content-type': 'application/json',
+    'x-wormhole-relay-id': 'relay-dedup-1',
+    'x-wormhole-hop': '1'
+  };
+  const first = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: relayHeaders,
+    body: JSON.stringify({ intent_id: 'dedup1', from_did: aliceDid, to_did: bobDid })
+  });
+  assert.equal(first.status, 202);
+
+  const second = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: relayHeaders,
+    body: JSON.stringify({ intent_id: 'dedup1', from_did: aliceDid, to_did: bobDid })
+  });
+  assert.equal(second.status, 202);
+  const secondPayload = await readJson(second);
+  assert.equal(secondPayload.status, 'duplicate');
+});
+
+test('expires signaling entries via TTL cleanup', async (t) => {
+  const { baseUrl } = await startFixture(t, {
+    signalTtlMs: 40,
+    cleanupIntervalMs: 10,
+    ratePerFromDid: 100,
+    ratePerToDid: 100
+  });
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, aliceDid, alicePub);
+  await publishDid(baseUrl, bobDid, bobPub);
+
+  const signalBody = JSON.stringify({
+    intent_id: 'ttl-intent',
+    from_did: aliceDid,
+    to_did: bobDid,
+    signal_type: 'offer',
+    payload: { sdp: 'v=0' }
+  });
+  const signalHeaders = signedHeaders({
+    did: aliceDid,
+    privateKey: alice.privateKey,
+    method: 'POST',
+    pathWithQuery: '/signal',
+    bodyRaw: signalBody
+  });
+  const sent = await fetch(`${baseUrl}/signal`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...signalHeaders },
+    body: signalBody
+  });
+  assert.equal(sent.status, 202);
+
+  await wait(120);
+
+  const readPath = `/signals?to_did=${encodeURIComponent(bobDid)}&intent_id=ttl-intent`;
+  const readHeaders = signedHeaders({
+    did: bobDid,
+    privateKey: bob.privateKey,
+    method: 'GET',
+    pathWithQuery: readPath
+  });
+  const read = await fetch(`${baseUrl}${readPath}`, { headers: readHeaders });
+  assert.equal(read.status, 200);
+  const payload = await readJson(read);
+  assert.equal(payload.signals.length, 0);
+});
+
+test('returns auth failure when remote did-state endpoint is malformed', async (t) => {
+  const portA = await findFreePort();
+  const badPort = await findFreePort();
+  const domainA = `127.0.0.1:${portA}`;
+  const badDomain = `127.0.0.1:${badPort}`;
+  const a = await startFixture(t, { port: portA, serverDomain: domainA });
+
+  const badServer = http.createServer((req, res) => {
+    if (req.url.startsWith('/did-state')) {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('not-json');
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not-found');
+  });
+  await new Promise((resolve, reject) => {
+    badServer.once('error', reject);
+    badServer.listen(badPort, '127.0.0.1', resolve);
+  });
+  t.after(async () => {
+    await new Promise((resolve) => badServer.close(resolve));
+  });
+
+  const alice = generateKeyPairSync('ed25519');
+  const aliceDid = `did:wormhole:${domainA}:alice`;
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(a.baseUrl, aliceDid, alicePub);
+
+  const response = await fetch(`${a.baseUrl}/signal`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-wormhole-relay-id': 'relay-malformed-1',
+      'x-wormhole-hop': '1',
+      'x-did': `did:wormhole:${badDomain}:bob`,
+      'x-signature': 'bad-signature',
+      'x-timestamp': new Date().toISOString(),
+      'x-nonce': 'n'
+    },
+    body: JSON.stringify({
+      intent_id: 'malformed-intent',
+      from_did: `did:wormhole:${badDomain}:bob`,
+      to_did: aliceDid,
+      signal_type: 'offer',
+      payload: { sdp: 'v=0' }
+    })
+  });
+  assert.equal(response.status, 401);
 });

@@ -18,6 +18,8 @@ The runtime must expose a single HTTP service process that handles request parsi
 
 The durable segment must store DID state records with key history and update timestamps in a local JSON file. Writes must be atomic to prevent truncation or partial-state corruption.
 
+If a DID string includes the optional key-fingerprint segment, runtime validation must enforce equality between that suffix and the computed fingerprint of `current_public_key`.
+
 Temporary segments must include communication intents, intent responses, signaling queues, replay cache entries, and relay deduplication entries. Temporary segments must be cleaned periodically and TTL bounded.
 
 Cross-domain forwarding must route based on `to_did` domain and must attach relay metadata for loop control. Relay hop limits and deduplication are required to avoid forwarding amplification.

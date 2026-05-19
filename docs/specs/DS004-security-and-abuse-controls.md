@@ -22,7 +22,7 @@ Temporary state objects must expire by TTL and be removed during periodic cleanu
 
 Signaling data must be treated as technical transport metadata only. Access to signaling queues must be DID-protected and limited to the addressed recipient DID.
 
-Cross-server forwarding must rely on HTTPS transport, not server-to-server signature PKI, and must apply loop prevention and deduplication.
+Cross-server forwarding must rely on HTTPS transport, not server-to-server signature PKI, and must apply loop prevention and deduplication. Insecure forwarding protocols may only be allowed for loopback-scoped development and test environments through explicit opt-in configuration.
 
 First DID publication bootstrap tokens must be configurable by environment and treated as operational secrets that must be rotated by operators before production.
 

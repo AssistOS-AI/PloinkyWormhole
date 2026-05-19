@@ -45,12 +45,27 @@ function toSet(value) {
   );
 }
 
+function toBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false;
+  }
+  return fallback;
+}
+
 export function loadConfig(env = process.env) {
   return {
     host: env.HOST || DEFAULTS.host,
     port: toNumber(env.PORT, DEFAULTS.port),
     serverDomain: env.SERVER_DOMAIN || DEFAULTS.serverDomain,
     forwardProtocol: env.FORWARD_PROTOCOL || DEFAULTS.forwardProtocol,
+    allowInsecureForwarding: toBoolean(env.ALLOW_INSECURE_FORWARDING, false),
     maxBodyBytes: toNumber(env.MAX_BODY_BYTES, DEFAULTS.maxBodyBytes),
     maxIntentEnvelopeBytes: toNumber(env.MAX_INTENT_ENVELOPE_BYTES, DEFAULTS.maxIntentEnvelopeBytes),
     maxSignalPayloadBytes: toNumber(env.MAX_SIGNAL_PAYLOAD_BYTES, DEFAULTS.maxSignalPayloadBytes),
