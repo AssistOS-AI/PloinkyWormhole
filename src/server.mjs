@@ -6,6 +6,11 @@ export async function startServer(overrides = {}) {
   const config = { ...loadConfig(), ...overrides };
   const app = await createApp(config);
   const server = http.createServer(app.handler);
+  server.requestTimeout = config.requestTimeoutMs;
+  server.headersTimeout = config.headersTimeoutMs;
+  server.keepAliveTimeout = config.keepAliveTimeoutMs;
+  server.timeout = config.socketTimeoutMs;
+  server.maxRequestsPerSocket = config.maxRequestsPerSocket;
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);

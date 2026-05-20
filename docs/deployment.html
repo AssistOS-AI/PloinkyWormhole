@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ploinky Wormhole Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <script type="module" src="/partials-loader.js"></script>
+</head>
+<body>
+  <div data-include="/partials/header.html"></div>
+  <main>
+    <p class="breadcrumbs"><a href="/index.html">Home</a> / Deployment</p>
+    <h1>Deployment and Hardening</h1>
+    <p>
+      The runtime is designed to sit behind a reverse proxy or edge load balancer. Safe production use depends on reverse-proxy hygiene,
+      strong bootstrap and admin secrets, durable storage for DID and admin state, and keeping the runtime's timeout and abuse controls enabled.
+    </p>
+
+    <h2>Recommended topology</h2>
+    <p>
+      Terminate TLS at the edge, bind the Wormhole runtime to loopback or a private address, enable trusted-proxy mode only when the upstream proxy is trusted,
+      and explicitly set <code>TRUSTED_PROXY_IPS</code> for non-loopback proxies.
+    </p>
+
+    <h2>Mandatory production settings</h2>
+    <table>
+      <thead>
+        <tr><th>Setting</th><th>Expectation</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>BOOTSTRAP_TOKEN</code></td><td>Non-default, 32+ random characters.</td></tr>
+        <tr><td><code>ADMIN_TOKEN</code></td><td>Configured, 32+ random characters.</td></tr>
+        <tr><td><code>FORWARD_PROTOCOL</code></td><td><code>https</code>.</td></tr>
+        <tr><td><code>ALLOW_INSECURE_FORWARDING</code></td><td><code>false</code>.</td></tr>
+        <tr><td><code>DID_STATE_FILE</code>, <code>ADMIN_STATE_FILE</code></td><td>Durable filesystem paths with backups.</td></tr>
+        <tr><td>Timeout settings</td><td>Keep request, header, socket, and keep-alive timeouts enabled.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Reverse-proxy responsibilities</h2>
+    <p>
+      The proxy should rewrite <code>x-forwarded-for</code>, enforce body limits, enforce edge timeouts, add HSTS, and optionally apply coarse IP rate limiting
+      before traffic reaches the runtime. Admin surfaces should be reachable only from trusted operator paths.
+    </p>
+
+    <h2>Readiness workflow</h2>
+    <p>
+      Treat <code>/ready</code> as the deployment gate. A healthy but degraded process is still a rollout blocker when tokens are weak, forwarding is unsafe,
+      or trusted-proxy mode is misconfigured.
+    </p>
+  </main>
+  <div data-include="/partials/footer.html"></div>
+</body>
+</html>

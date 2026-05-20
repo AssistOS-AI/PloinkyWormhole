@@ -16,49 +16,53 @@
   <main>
     <p class="breadcrumbs"><a href="/index.html">Home</a> / API</p>
     <h1>API Surface</h1>
-    <p>The API mirrors three server concepts: DID state, communication intent, and signaling.</p>
+    <p>The API mirrors three protocol concepts plus explicit operational and admin surfaces.</p>
 
     <table>
       <thead>
-        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th><th>Signature required</th></tr>
+        <tr><th>Method</th><th>Endpoint</th><th>Purpose</th><th>Authentication</th></tr>
       </thead>
       <tbody>
+        <tr><td>GET</td><td>/health</td><td>Liveness and attack-level summary</td><td>No</td></tr>
+        <tr><td>GET</td><td>/ready</td><td>Readiness and deployment warnings</td><td>No</td></tr>
+        <tr><td>GET</td><td>/limits</td><td>Published limits and hardening knobs</td><td>No</td></tr>
         <tr><td>GET</td><td>/did-state?did=...</td><td>Read public DID state</td><td>No</td></tr>
-        <tr><td>PUT</td><td>/did-state</td><td>Create or update DID state</td><td>Yes after bootstrap</td></tr>
-        <tr><td>POST</td><td>/intent</td><td>Submit intent or receive forwarded intent</td><td>No</td></tr>
-        <tr><td>GET</td><td>/intents?to_did=...</td><td>Read active intents for DID</td><td>Yes (to_did)</td></tr>
-        <tr><td>POST</td><td>/intent/{intent_id}/seen</td><td>Mark intent as seen</td><td>Yes (to_did)</td></tr>
-        <tr><td>POST</td><td>/intent-response</td><td>Submit response to intent</td><td>Yes (from_did responder)</td></tr>
-        <tr><td>GET</td><td>/intent-responses?to_did=...</td><td>Read responses addressed to DID</td><td>Yes (to_did)</td></tr>
-        <tr><td>POST</td><td>/signal</td><td>Submit signaling message</td><td>Yes (from_did)</td></tr>
-        <tr><td>GET</td><td>/signals?to_did=...&intent_id=...</td><td>Read signaling messages</td><td>Yes (to_did)</td></tr>
-        <tr><td>GET</td><td>/health</td><td>Liveness status</td><td>No</td></tr>
-        <tr><td>GET</td><td>/limits</td><td>Published server limits</td><td>No</td></tr>
+        <tr><td>PUT</td><td>/did-state</td><td>Create or update DID state</td><td>Bootstrap token, DID signature, or admin token</td></tr>
+        <tr><td>POST</td><td>/intent</td><td>Submit intent</td><td>No</td></tr>
+        <tr><td>GET</td><td>/intents?to_did=...</td><td>Read visible intents</td><td>DID signature from <code>to_did</code></td></tr>
+        <tr><td>POST</td><td>/intent/{intent_id}/seen</td><td>Mark intent seen</td><td>DID signature from <code>to_did</code></td></tr>
+        <tr><td>POST</td><td>/intent-response</td><td>Submit response</td><td>DID signature from responder</td></tr>
+        <tr><td>GET</td><td>/intent-responses?to_did=...</td><td>Read responses</td><td>DID signature from <code>to_did</code></td></tr>
+        <tr><td>POST</td><td>/signal</td><td>Submit signaling</td><td>DID signature from sender</td></tr>
+        <tr><td>GET</td><td>/signals?to_did=...&amp;intent_id=...</td><td>Read signaling</td><td>DID signature from <code>to_did</code></td></tr>
+        <tr><td>GET</td><td>/admin/dashboard</td><td>HTML dashboard shell</td><td>No shell data, no embedded secrets</td></tr>
+        <tr><td>GET</td><td>/admin/metrics</td><td>Metrics and readiness snapshot</td><td><code>x-admin-token</code></td></tr>
+        <tr><td>GET</td><td>/admin/events</td><td>Recent security events</td><td><code>x-admin-token</code></td></tr>
+        <tr><td>GET/POST/DELETE</td><td>/admin/blocklist</td><td>Read and mutate manual blocklists</td><td><code>x-admin-token</code></td></tr>
       </tbody>
     </table>
 
-    <h2>Forwarding semantics</h2>
+    <h2>Protocol constraints</h2>
     <p>
-      The same endpoints process local and forwarded objects. If <code>to_did</code> belongs to another server domain,
-      the object is forwarded over HTTPS according to server configuration.
-      Relay metadata headers prevent loops and duplicate delivery. For signed transport objects
-      (<code>/intent-response</code> and <code>/signal</code>), forwarding preserves the original DID signature
-      headers and signed body so the destination server can re-verify canonical signatures, including
-      remote DID-state resolution when sender DID state is not local.
+      Local agent writes must use a local <code>from_did</code> on <code>/intent</code>, <code>/intent-response</code>, and <code>/signal</code>.
+      Forwarded writes are distinguished only by relay headers; the body model does not change.
     </p>
     <p>
-      Production cross-server forwarding is HTTPS-only. Insecure protocol use is blocked unless explicitly enabled for loopback-scoped local testing.
+      Responses must target an existing local canonical intent when the responder is local.
+      Signals must be bounded in size and time, and they are accepted only when the server can prove the local canonical intent is already <code>accepted</code>.
     </p>
+
+    <h2>Admin contract</h2>
     <p>
-      DID-protected endpoints require an <code>active</code> DID state for authentication. DIDs marked
-      <code>disabled</code> or <code>revoked</code> remain publicly visible through <code>/did-state</code> but cannot
-      authorize protected metadata operations.
+      Admin APIs accept the token only in <code>x-admin-token</code>. The dashboard shell asks the operator to paste the token locally in the browser and then
+      calls the JSON APIs with headers. Tokens must never appear in query strings.
     </p>
 
     <h2>Specs contract</h2>
     <p>
-      Full normative constraints live in <a href="/specsLoader.html?spec=DS003-api-contract.md">DS003-api-contract.md</a> and
-      <a href="/specsLoader.html?spec=DS004-security-and-abuse-controls.md">DS004-security-and-abuse-controls.md</a>.
+      Full normative constraints live in <a href="/specsLoader.html?spec=DS003-api-contract.md">DS003-api-contract.md</a>,
+      <a href="/specsLoader.html?spec=DS004-security-and-abuse-controls.md">DS004-security-and-abuse-controls.md</a>,
+      and <a href="/specsLoader.html?spec=DS005-operations-and-admin-observability.md">DS005-operations-and-admin-observability.md</a>.
     </p>
   </main>
   <div data-include="/partials/footer.html"></div>

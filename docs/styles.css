@@ -26,12 +26,18 @@ header {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
 }
 
 nav a {
   color: #1f2937;
   text-decoration: none;
-  margin-right: 0.9rem;
   font-weight: 600;
 }
 
@@ -83,4 +89,11 @@ th, td {
   border: 1px solid #e5e7eb;
   padding: 0.5rem;
   text-align: left;
+}
+
+.callout {
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
 }

@@ -17,34 +17,55 @@
     <p class="breadcrumbs"><a href="/index.html">Home</a> / Security</p>
     <h1>Security and Anti-Abuse Controls</h1>
     <p>
-      The server enforces operational protections without semantic trust classification.
-      It does not decide if a sender is trusted, known, or blocked at application semantics level.
-      It only applies transport-level controls.
+      The server enforces operational protections without semantic trust classification. It does not decide whether a sender is trusted or known;
+      it limits abuse, preserves bounded resources, and keeps sensitive metadata queues protected by DID or admin authentication.
     </p>
 
     <pre class="mermaid">stateDiagram-v2
-      [*] --> available
-      available --> seen
-      seen --> accepted
-      seen --> rejected
-      seen --> later
-      available --> expired
+      [*] --> normal
+      normal --> elevated
+      elevated --> under_attack
+      under_attack --> elevated
+      elevated --> normal
     </pre>
 
-    <h2>Operational controls</h2>
+    <h2>Boundary controls</h2>
     <p>
-      Controls include rate limits by IP and DID dimensions, payload size limits, per-intent signaling queue limits,
-      short TTL windows for temporary objects, replay cache for signed requests, and relay cache for forwarded object deduplication.
-    </p>
-    <p>
-      Signatures use the current DID public key and canonical request payloads. DID-protected reads are mandatory for intents,
-      responses, and signaling retrieval so metadata remains private to DID controllers.
+      Requests are constrained by maximum body size, envelope size, signal payload size, maximum signals per intent, replay-cache caps, relay-cache caps,
+      and bounded observability buffers. These limits make the runtime predictable under load.
     </p>
 
-    <h2>Constraints and scope</h2>
+    <h2>Rate limiting and auto-blocks</h2>
     <p>
-      The server is intentionally neutral: it does not host mailboxes, chat streams, file transfer, task payloads, or workspace policy engines.
-      Final content is exchanged peer-to-peer after agent-level acceptance and channel establishment.
+      Per-IP limiting applies to every request. DID-keyed limits apply to DID-to-DID writes and are enforced after successful signature verification
+      for signed flows. Repeated abuse raises offense scores and can trigger temporary IP or verified-DID auto-blocks.
+    </p>
+    <p>
+      Unsigned intent submission never auto-blocks claimed DIDs. This prevents attackers from forging identities and weaponizing the abuse pipeline.
+    </p>
+
+    <h2>Trusted proxy model</h2>
+    <p>
+      The runtime trusts <code>x-forwarded-for</code> only when trusted-proxy mode is explicitly enabled and the immediate upstream address is loopback
+      or listed in <code>TRUSTED_PROXY_IPS</code>. Direct-exposure deployments should keep trusted-proxy mode disabled.
+    </p>
+
+    <h2>Security headers and admin token handling</h2>
+    <p>
+      Responses set <code>X-Content-Type-Options</code>, <code>X-Frame-Options</code>, <code>Referrer-Policy</code>, restrictive CSP, and <code>Cache-Control: no-store</code>.
+      Admin APIs require <code>x-admin-token</code>; token transport in URLs is intentionally unsupported.
+    </p>
+
+    <h2>Timeout hardening</h2>
+    <p>
+      Request timeout, header timeout, socket timeout, keep-alive timeout, and max requests per socket reduce the impact of slowloris-style and connection-hoarding attacks.
+      Reverse proxies should mirror or tighten these limits at the edge.
+    </p>
+
+    <h2>Scope boundary</h2>
+    <p>
+      The server is still intentionally neutral: it does not host mailboxes, chat streams, file transfer, task payloads, or workspace policy engines.
+      Hardening and observability improve operational safety without changing protocol semantics.
     </p>
   </main>
   <div data-include="/partials/footer.html"></div>

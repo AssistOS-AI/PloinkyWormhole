@@ -36,8 +36,9 @@ export function computeFingerprint(publicKeyPem) {
   return createHash('sha256').update(publicKeyPem, 'utf8').digest('hex');
 }
 
-export function createHttpError(statusCode, message) {
+export function createHttpError(statusCode, message, details = {}) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  Object.assign(error, details);
   return error;
 }

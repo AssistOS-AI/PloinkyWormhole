@@ -16,9 +16,9 @@ This specification is the coding-style authority for this repository. All code c
 
 Source code must use Node.js ESM modules with `.mjs` extension and no external runtime dependencies. Runtime code belongs in `src/`, test code belongs in `test/`, and documentation tooling belongs in `scripts/`.
 
-Modules must keep explicit responsibilities and avoid hidden global state. Request handling, DID parsing, signature verification, persistence, and rate limiting must remain separated by concern. Functions should validate input early and return explicit errors rather than silently ignoring invalid states.
+Modules must keep explicit responsibilities and avoid hidden global state. Request handling, DID parsing, signature verification, persistence, admin state, observability, and rate limiting must remain separated by concern. Functions should validate input early and return explicit errors rather than silently ignoring invalid states.
 
-Tests must use built-in `node:test` and run without third-party frameworks. New behavior must include request-level tests when endpoints or protocol constraints change.
+Tests must use built-in `node:test` and run without third-party frameworks. New behavior must include request-level tests when endpoints, protocol constraints, admin surfaces, or abuse controls change.
 
 Documentation and specification files must remain in English. Any change that modifies runtime behavior, API contract, constraints, or architecture must update relevant HTML pages and DS specs in the same change set.
 

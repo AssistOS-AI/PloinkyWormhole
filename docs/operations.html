@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ploinky Wormhole Documentation</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <script type="module" src="/partials-loader.js"></script>
+</head>
+<body>
+  <div data-include="/partials/header.html"></div>
+  <main>
+    <p class="breadcrumbs"><a href="/index.html">Home</a> / Operations</p>
+    <h1>Operations and Dashboard</h1>
+    <p>
+      The runtime now includes explicit operator-facing observability: public liveness/readiness, authenticated metrics and event streams,
+      manual blocklist management, and a browser dashboard shell that works with header-based admin authentication.
+    </p>
+
+    <h2>Public operational endpoints</h2>
+    <table>
+      <thead>
+        <tr><th>Endpoint</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>GET /health</code></td><td>Liveness and coarse attack-level signal for load balancers.</td></tr>
+        <tr><td><code>GET /ready</code></td><td>Production-readiness checks and warnings, returns 503 when degraded.</td></tr>
+        <tr><td><code>GET /limits</code></td><td>Published resource bounds and hardening knobs.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Admin observability</h2>
+    <p>
+      The admin JSON APIs are protected by <code>x-admin-token</code>. <code>/admin/metrics</code> exposes uptime, attack level, route counters,
+      queue sizes, cache sizes, effective blocklist counts, active auto-blocks, and top offenders. <code>/admin/events</code> exposes the bounded recent event buffer.
+    </p>
+
+    <h2>Dashboard shell</h2>
+    <p>
+      <code>/admin/dashboard</code> serves an HTML shell with no embedded live data. The operator enters the admin token locally in the browser;
+      the page then fetches metrics, events, and blocklist data using request headers instead of URL parameters.
+    </p>
+
+    <h2>Manual blocklist workflow</h2>
+    <p>
+      Operators can add or remove persistent manual blocks for IPs, DIDs, and domains using <code>/admin/blocklist</code>.
+      Manual entries survive restart through the admin-state JSON file. Temporary auto-blocks remain visible in the same view and can also be cleared through the same endpoint.
+    </p>
+
+    <h2>Attack-level guidance</h2>
+    <p>
+      The runtime derives <code>normal</code>, <code>elevated</code>, and <code>under_attack</code> states from recent offense activity and active auto-blocks.
+      This is meant to guide operators and dashboards, not to replace external logging or incident workflows.
+    </p>
+  </main>
+  <div data-include="/partials/footer.html"></div>
+</body>
+</html>

@@ -52,6 +52,7 @@ async function findFreePort() {
 async function startFixture(t, overrides = {}) {
   const tempDir = await mkdtemp(join(tmpdir(), 'wormhole-'));
   const didStateFile = join(tempDir, 'did-states.json');
+  const adminStateFile = join(tempDir, 'admin-state.json');
   const selectedPort = overrides.port ?? 0;
   const selectedDomain = overrides.serverDomain ?? 'test.local';
   const instance = await startServer({
@@ -62,6 +63,7 @@ async function startFixture(t, overrides = {}) {
     allowInsecureForwarding: true,
     bootstrapToken: 'boot',
     didStateFile,
+    adminStateFile,
     intentTtlMs: 5_000,
     responseTtlMs: 5_000,
     signalTtlMs: 5_000,
@@ -94,6 +96,54 @@ async function publishDid(baseUrl, did, publicKeyPem) {
     })
   });
   assert.equal(response.status, 201);
+}
+
+async function createIntent(baseUrl, payload) {
+  const response = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  assert.equal(response.status, 202);
+  return response;
+}
+
+async function acceptIntent(baseUrl, { intentId, fromDid, toDid, privateKey }) {
+  const path = '/intent-response';
+  const body = JSON.stringify({
+    intent_id: intentId,
+    from_did: fromDid,
+    to_did: toDid,
+    response: 'accept'
+  });
+  const headers = signedHeaders({
+    did: fromDid,
+    privateKey,
+    method: 'POST',
+    pathWithQuery: path,
+    bodyRaw: body
+  });
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body
+  });
+  assert.equal(response.status, 202);
+  return response;
+}
+
+async function createAcceptedIntent(baseUrl, { intentId, senderDid, recipientDid, recipientKey }) {
+  await createIntent(baseUrl, {
+    intent_id: intentId,
+    from_did: senderDid,
+    to_did: recipientDid
+  });
+  await acceptIntent(baseUrl, {
+    intentId,
+    fromDid: recipientDid,
+    toDid: senderDid,
+    privateKey: recipientKey
+  });
 }
 
 test('DID state publish, read, and signed key rotation', async (t) => {
@@ -147,17 +197,12 @@ test('intents require DID-protected reads and seen acknowledgments', async (t) =
   await publishDid(baseUrl, aliceDid, alicePub);
   await publishDid(baseUrl, bobDid, bobPub);
 
-  const intent = await fetch(`${baseUrl}/intent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      intent_id: 'intent-1',
-      from_did: aliceDid,
-      to_did: bobDid,
-      nonce: 'nonce-1'
-    })
+  await createIntent(baseUrl, {
+    intent_id: 'intent-1',
+    from_did: aliceDid,
+    to_did: bobDid,
+    nonce: 'nonce-1'
   });
-  assert.equal(intent.status, 202);
 
   const unsigned = await fetch(`${baseUrl}/intents?to_did=${encodeURIComponent(bobDid)}`);
   assert.equal(unsigned.status, 401);
@@ -203,6 +248,12 @@ test('signed signaling send and receive succeeds', async (t) => {
 
   await publishDid(baseUrl, aliceDid, alicePub);
   await publishDid(baseUrl, bobDid, bobPub);
+  await createAcceptedIntent(baseUrl, {
+    intentId: 'intent-22',
+    senderDid: aliceDid,
+    recipientDid: bobDid,
+    recipientKey: bob.privateKey
+  });
 
   const sendPath = '/signal';
   const sendBody = JSON.stringify({
@@ -295,16 +346,11 @@ test('forwards intent response and signal with preserved DID signatures', async 
   await publishDid(a.baseUrl, aliceDid, alicePub);
   await publishDid(b.baseUrl, bobDid, bobPub);
 
-  const createIntent = await fetch(`${a.baseUrl}/intent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      intent_id: 'cross-intent-1',
-      from_did: aliceDid,
-      to_did: bobDid
-    })
+  await createIntent(a.baseUrl, {
+    intent_id: 'cross-intent-1',
+    from_did: aliceDid,
+    to_did: bobDid
   });
-  assert.equal(createIntent.status, 202);
 
   const intentsPath = `/intents?to_did=${encodeURIComponent(bobDid)}`;
   const intentsHeaders = signedHeaders({
@@ -577,12 +623,19 @@ test('health and limits endpoints expose operational metadata', async (t) => {
   assert.equal(health.status, 200);
   const healthPayload = await readJson(health);
   assert.equal(healthPayload.status, 'ok');
+  assert.equal(typeof healthPayload.attack_level, 'string');
+
+  const ready = await fetch(`${baseUrl}/ready`);
+  assert.equal(ready.status, 503);
+  const readyPayload = await readJson(ready);
+  assert.equal(readyPayload.status, 'degraded');
 
   const limits = await fetch(`${baseUrl}/limits`);
   assert.equal(limits.status, 200);
   const limitsPayload = await readJson(limits);
   assert.equal(limitsPayload.rate_limits.per_ip, 99);
   assert.equal(limitsPayload.max_signals_per_intent, 7);
+  assert.equal(limitsPayload.auto_block_threshold, 12);
 });
 
 test('enforces blocklist and payload size limits', async (t) => {
@@ -600,7 +653,19 @@ test('enforces blocklist and payload size limits', async (t) => {
   const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
   await publishDid(baseUrl, aliceDid, alicePub);
   await publishDid(baseUrl, bobDid, bobPub);
+  await createAcceptedIntent(baseUrl, {
+    intentId: 'ttl-intent',
+    senderDid: aliceDid,
+    recipientDid: bobDid,
+    recipientKey: bob.privateKey
+  });
   await publishDid(baseUrl, blockedDid, bobPub);
+  await createAcceptedIntent(baseUrl, {
+    intentId: 'intent-size',
+    senderDid: aliceDid,
+    recipientDid: bobDid,
+    recipientKey: bob.privateKey
+  });
 
   const blockedIntent = await fetch(`${baseUrl}/intent`, {
     method: 'POST',
@@ -689,6 +754,12 @@ test('enforces rate limits and signaling queue cap', async (t) => {
   const bobPub2 = bob2.publicKey.export({ type: 'spki', format: 'pem' });
   await publishDid(relaxed.baseUrl, aliceDid2, alicePub2);
   await publishDid(relaxed.baseUrl, bobDid2, bobPub2);
+  await createAcceptedIntent(relaxed.baseUrl, {
+    intentId: 'queue-cap',
+    senderDid: aliceDid2,
+    recipientDid: bobDid2,
+    recipientKey: bob2.privateKey
+  });
 
   const sendSignal = async (intentId) => {
     const body = JSON.stringify({
@@ -728,6 +799,12 @@ test('enforces relay hop limit and deduplicates relay ids', async (t) => {
   const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
   await publishDid(baseUrl, aliceDid, alicePub);
   await publishDid(baseUrl, bobDid, bobPub);
+  await createAcceptedIntent(baseUrl, {
+    intentId: 'ttl-intent',
+    senderDid: aliceDid,
+    recipientDid: bobDid,
+    recipientKey: bob.privateKey
+  });
 
   const overHop = await fetch(`${baseUrl}/intent`, {
     method: 'POST',
@@ -788,6 +865,12 @@ test('expires signaling entries via TTL cleanup', async (t) => {
   const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
   await publishDid(baseUrl, aliceDid, alicePub);
   await publishDid(baseUrl, bobDid, bobPub);
+  await createAcceptedIntent(baseUrl, {
+    intentId: 'ttl-intent',
+    senderDid: aliceDid,
+    recipientDid: bobDid,
+    recipientKey: bob.privateKey
+  });
 
   const signalBody = JSON.stringify({
     intent_id: 'ttl-intent',
@@ -874,4 +957,453 @@ test('returns auth failure when remote did-state endpoint is malformed', async (
     })
   });
   assert.equal(response.status, 401);
+});
+
+test('rejects intent when from_did does not belong to local server domain', async (t) => {
+  const { baseUrl } = await startFixture(t);
+  const alice = generateKeyPairSync('ed25519');
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, 'did:wormhole:test.local:alice', alicePub);
+
+  const response = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      intent_id: 'cross-domain-intent',
+      from_did: 'did:wormhole:remote.example:imposter',
+      to_did: 'did:wormhole:test.local:alice'
+    })
+  });
+  assert.equal(response.status, 400);
+  const payload = await readJson(response);
+  assert.ok(payload.error.includes('does not belong'));
+});
+
+test('admin recovery mode allows unsigned DID state update', async (t) => {
+  const { baseUrl } = await startFixture(t, { adminToken: 'admin-secret' });
+  const alice = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+
+  await publishDid(baseUrl, aliceDid, alicePub);
+
+  const pairV2 = generateKeyPairSync('ed25519');
+  const pubV2 = pairV2.publicKey.export({ type: 'spki', format: 'pem' });
+
+  const recovery = await fetch(`${baseUrl}/did-state`, {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      'x-admin-token': 'admin-secret'
+    },
+    body: JSON.stringify({
+      did: aliceDid,
+      current_public_key: pubV2,
+      status: 'active'
+    })
+  });
+  assert.equal(recovery.status, 200);
+  const after = await readJson(recovery);
+  assert.equal(after.current_public_key, pubV2);
+  assert.equal(after.key_history.length, 2);
+});
+
+test('admin recovery fails with wrong token', async (t) => {
+  const { baseUrl } = await startFixture(t, { adminToken: 'admin-secret' });
+  const alice = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+
+  await publishDid(baseUrl, aliceDid, alicePub);
+
+  const pairV2 = generateKeyPairSync('ed25519');
+  const pubV2 = pairV2.publicKey.export({ type: 'spki', format: 'pem' });
+
+  const recovery = await fetch(`${baseUrl}/did-state`, {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      'x-admin-token': 'wrong-token'
+    },
+    body: JSON.stringify({
+      did: aliceDid,
+      current_public_key: pubV2,
+      status: 'active'
+    })
+  });
+  assert.equal(recovery.status, 401);
+});
+
+test('disabled DID cannot authenticate protected operations', async (t) => {
+  const { baseUrl } = await startFixture(t);
+  const bob = generateKeyPairSync('ed25519');
+  const bobDid = 'did:wormhole:test.local:bob';
+  const bobPub = bob.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, bobDid, bobPub);
+
+  const disablePath = '/did-state';
+  const disableBody = JSON.stringify({
+    did: bobDid,
+    current_public_key: bobPub,
+    status: 'disabled'
+  });
+  const disableHeaders = signedHeaders({
+    did: bobDid,
+    privateKey: bob.privateKey,
+    method: 'PUT',
+    pathWithQuery: disablePath,
+    bodyRaw: disableBody
+  });
+  const disable = await fetch(`${baseUrl}${disablePath}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', ...disableHeaders },
+    body: disableBody
+  });
+  assert.equal(disable.status, 200);
+
+  const getPath = `/intents?to_did=${encodeURIComponent(bobDid)}`;
+  const getHeaders = signedHeaders({
+    did: bobDid,
+    privateKey: bob.privateKey,
+    method: 'GET',
+    pathWithQuery: getPath
+  });
+  const read = await fetch(`${baseUrl}${getPath}`, { headers: getHeaders });
+  assert.equal(read.status, 403);
+});
+
+test('blocked intent is not stored when validation fails', async (t) => {
+  const blockedDid = 'did:wormhole:test.local:blocked';
+  const { baseUrl } = await startFixture(t, {
+    blocklistDids: new Set([blockedDid])
+  });
+  const alice = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const alicePub = alice.publicKey.export({ type: 'spki', format: 'pem' });
+  await publishDid(baseUrl, aliceDid, alicePub);
+
+  const response = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from_did: blockedDid,
+      to_did: aliceDid
+    })
+  });
+  assert.equal(response.status, 403);
+
+  const getPath = `/intents?to_did=${encodeURIComponent(aliceDid)}`;
+  const getHeaders = signedHeaders({
+    did: aliceDid,
+    privateKey: alice.privateKey,
+    method: 'GET',
+    pathWithQuery: getPath
+  });
+  const read = await fetch(`${baseUrl}${getPath}`, { headers: getHeaders });
+  assert.equal(read.status, 200);
+  const payload = await readJson(read);
+  assert.equal(payload.intents.length, 0);
+});
+
+test('accepted intents are removed from visible intent reads', async (t) => {
+  const { baseUrl } = await startFixture(t);
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  await publishDid(baseUrl, aliceDid, alice.publicKey.export({ type: 'spki', format: 'pem' }));
+  await publishDid(baseUrl, bobDid, bob.publicKey.export({ type: 'spki', format: 'pem' }));
+  await createAcceptedIntent(baseUrl, {
+    intentId: 'intent-final',
+    senderDid: aliceDid,
+    recipientDid: bobDid,
+    recipientKey: bob.privateKey
+  });
+
+  const getPath = `/intents?to_did=${encodeURIComponent(bobDid)}`;
+  const headers = signedHeaders({
+    did: bobDid,
+    privateKey: bob.privateKey,
+    method: 'GET',
+    pathWithQuery: getPath
+  });
+  const response = await fetch(`${baseUrl}${getPath}`, { headers });
+  assert.equal(response.status, 200);
+  const payload = await readJson(response);
+  assert.equal(payload.intents.length, 0);
+});
+
+test('rejects local response when intent does not exist', async (t) => {
+  const { baseUrl } = await startFixture(t);
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  await publishDid(baseUrl, aliceDid, alice.publicKey.export({ type: 'spki', format: 'pem' }));
+  await publishDid(baseUrl, bobDid, bob.publicKey.export({ type: 'spki', format: 'pem' }));
+
+  const path = '/intent-response';
+  const body = JSON.stringify({
+    intent_id: 'missing-intent',
+    from_did: bobDid,
+    to_did: aliceDid,
+    response: 'accept'
+  });
+  const headers = signedHeaders({
+    did: bobDid,
+    privateKey: bob.privateKey,
+    method: 'POST',
+    pathWithQuery: path,
+    bodyRaw: body
+  });
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body
+  });
+  assert.equal(response.status, 404);
+});
+
+test('rejects signal before intent acceptance and expired signal payloads', async (t) => {
+  const { baseUrl } = await startFixture(t);
+  const alice = generateKeyPairSync('ed25519');
+  const bob = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  const bobDid = 'did:wormhole:test.local:bob';
+  await publishDid(baseUrl, aliceDid, alice.publicKey.export({ type: 'spki', format: 'pem' }));
+  await publishDid(baseUrl, bobDid, bob.publicKey.export({ type: 'spki', format: 'pem' }));
+
+  await createIntent(baseUrl, {
+    intent_id: 'needs-accept',
+    from_did: aliceDid,
+    to_did: bobDid
+  });
+
+  const path = '/signal';
+  const body = JSON.stringify({
+    intent_id: 'needs-accept',
+    from_did: aliceDid,
+    to_did: bobDid,
+    signal_type: 'offer',
+    payload: { sdp: 'v=0' }
+  });
+  const headers = signedHeaders({
+    did: aliceDid,
+    privateKey: alice.privateKey,
+    method: 'POST',
+    pathWithQuery: path,
+    bodyRaw: body
+  });
+  const early = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body
+  });
+  assert.equal(early.status, 409);
+
+  await acceptIntent(baseUrl, {
+    intentId: 'needs-accept',
+    fromDid: bobDid,
+    toDid: aliceDid,
+    privateKey: bob.privateKey
+  });
+
+  const expiredBody = JSON.stringify({
+    intent_id: 'needs-accept',
+    from_did: aliceDid,
+    to_did: bobDid,
+    signal_type: 'offer',
+    payload: { sdp: 'v=0' },
+    expires_at: new Date(Date.now() - 1_000).toISOString()
+  });
+  const expiredHeaders = signedHeaders({
+    did: aliceDid,
+    privateKey: alice.privateKey,
+    method: 'POST',
+    pathWithQuery: path,
+    bodyRaw: expiredBody
+  });
+  const expired = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...expiredHeaders },
+    body: expiredBody
+  });
+  assert.equal(expired.status, 400);
+});
+
+test('admin endpoints expose dashboard, metrics, and manual blocklists', async (t) => {
+  const token = 'a'.repeat(32);
+  const { baseUrl } = await startFixture(t, { adminToken: token });
+
+  const dashboard = await fetch(`${baseUrl}/admin/dashboard`);
+  assert.equal(dashboard.status, 200);
+  assert.match(dashboard.headers.get('content-security-policy'), /script-src 'nonce-/);
+  const dashboardHtml = await dashboard.text();
+  assert.match(dashboardHtml, /Admin Dashboard/);
+
+  const metrics = await fetch(`${baseUrl}/admin/metrics`, {
+    headers: { 'x-admin-token': token }
+  });
+  assert.equal(metrics.status, 200);
+  const metricsPayload = await readJson(metrics);
+  assert.equal(typeof metricsPayload.metrics.attack_level, 'string');
+
+  const createBlock = await fetch(`${baseUrl}/admin/blocklist`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-admin-token': token
+    },
+    body: JSON.stringify({
+      type: 'domain',
+      value: 'blocked.example',
+      reason: 'manual test'
+    })
+  });
+  assert.equal(createBlock.status, 201);
+
+  const readBlocks = await fetch(`${baseUrl}/admin/blocklist`, {
+    headers: { 'x-admin-token': token }
+  });
+  assert.equal(readBlocks.status, 200);
+  const blockPayload = await readJson(readBlocks);
+  assert.equal(blockPayload.manual.manual_blocked_domains.length, 1);
+
+  const removeBlock = await fetch(`${baseUrl}/admin/blocklist`, {
+    method: 'DELETE',
+    headers: {
+      'content-type': 'application/json',
+      'x-admin-token': token
+    },
+    body: JSON.stringify({
+      type: 'domain',
+      value: 'blocked.example'
+    })
+  });
+  assert.equal(removeBlock.status, 200);
+});
+
+test('auto-blocks abusive IPs without auto-blocking forged unsigned DIDs', async (t) => {
+  const token = 'b'.repeat(32);
+  const { baseUrl } = await startFixture(t, {
+    adminToken: token,
+    autoBlockThreshold: 5
+  });
+  const alice = generateKeyPairSync('ed25519');
+  const aliceDid = 'did:wormhole:test.local:alice';
+  await publishDid(baseUrl, aliceDid, alice.publicKey.export({ type: 'spki', format: 'pem' }));
+
+  const forged = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from_did: 'did:wormhole:test.local:forged',
+      to_did: 'did:wormhole:test.local:missing'
+    })
+  });
+  assert.equal(forged.status, 202);
+
+  const badSignal = await fetch(`${baseUrl}/signal`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-did': aliceDid,
+      'x-signature': 'bad-signature',
+      'x-timestamp': new Date().toISOString(),
+      'x-nonce': 'n1'
+    },
+    body: JSON.stringify({
+      intent_id: 'missing',
+      from_did: aliceDid,
+      to_did: 'did:wormhole:test.local:bob',
+      signal_type: 'offer',
+      payload: { sdp: 'v=0' }
+    })
+  });
+  assert.equal(badSignal.status, 401);
+
+  const blockedIntent = await fetch(`${baseUrl}/intent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from_did: aliceDid,
+      to_did: 'did:wormhole:test.local:bob'
+    })
+  });
+  assert.equal(blockedIntent.status, 403);
+
+  const blocklists = await fetch(`${baseUrl}/admin/blocklist`, {
+    headers: { 'x-admin-token': token }
+  });
+  assert.equal(blocklists.status, 200);
+  const payload = await readJson(blocklists);
+  assert.equal(payload.auto.blocked_ips.length, 1);
+  assert.equal(payload.auto.blocked_dids.length, 0);
+});
+
+test('trust proxy mode only honors x-forwarded-for from trusted proxies', async (t) => {
+  const trustedToken = 'c'.repeat(32);
+  const trusted = await startFixture(t, {
+    trustProxy: true,
+    trustedProxyIps: new Set(['127.0.0.1']),
+    adminToken: trustedToken
+  });
+
+  const trustedBlock = await fetch(`${trusted.baseUrl}/admin/blocklist`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-admin-token': trustedToken
+    },
+    body: JSON.stringify({
+      type: 'ip',
+      value: '198.51.100.25'
+    })
+  });
+  assert.equal(trustedBlock.status, 201);
+
+  const blockedByForwarded = await fetch(`${trusted.baseUrl}/intent`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-forwarded-for': '198.51.100.25'
+    },
+    body: JSON.stringify({
+      from_did: 'did:wormhole:test.local:alice',
+      to_did: 'did:wormhole:test.local:bob'
+    })
+  });
+  assert.equal(blockedByForwarded.status, 403);
+
+  const untrustedToken = 'd'.repeat(32);
+  const untrusted = await startFixture(t, {
+    trustProxy: false,
+    adminToken: untrustedToken
+  });
+
+  const untrustedBlock = await fetch(`${untrusted.baseUrl}/admin/blocklist`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-admin-token': untrustedToken
+    },
+    body: JSON.stringify({
+      type: 'ip',
+      value: '203.0.113.44'
+    })
+  });
+  assert.equal(untrustedBlock.status, 201);
+
+  const ignoredForwarded = await fetch(`${untrusted.baseUrl}/intent`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-forwarded-for': '203.0.113.44'
+    },
+    body: JSON.stringify({
+      from_did: 'did:wormhole:test.local:alice',
+      to_did: 'did:wormhole:test.local:bob'
+    })
+  });
+  assert.equal(ignoredForwarded.status, 202);
 });
