@@ -152,3 +152,4 @@ vite.config.ts.timestamp-*
 .agents/skills/oskill_build/
 .agents/skills/review_specs/
 # <<< ploinky default-skills <<<
+.antigravitycli/
