@@ -143,13 +143,14 @@ vite.config.ts.timestamp-*
 .vite/
 # >>> ploinky default-skills >>>
 .claude
-.agents/skills/achilles_specs/
-.agents/skills/antropic_skill_build/
-.agents/skills/article_build/
-.agents/skills/cskill_build/
-.agents/skills/dgskill_build/
-.agents/skills/gamp_specs/
-.agents/skills/oskill_build/
-.agents/skills/review_specs/
+.agents/skills/achilles-specs/
+.agents/skills/antropic-skill-build/
+.agents/skills/article-build/
+.agents/skills/cskill-build/
+.agents/skills/dgskill-build/
+.agents/skills/gamp-specs/
+.agents/skills/manage-ploinky-agents/
+.agents/skills/oskill-build/
+.agents/skills/review-specs/
 # <<< ploinky default-skills <<<
 .antigravitycli/
